@@ -1080,7 +1080,3 @@ FleetGuard AI is built around five main goals:
 The architecture is intentionally modular so that telemetry processing, business operations, analytics, machine learning, and AI can evolve independently while sharing consistent data contracts.
 
 ---
-
-# License
-
-Add the applicable project license here.
