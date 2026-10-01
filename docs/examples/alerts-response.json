@@ -1,0 +1,6 @@
+﻿{
+  "data": [
+    { "id": "alert-1001", "severity": "warning", "message": "Low tire pressure - front left" },
+    { "id": "alert-1002", "severity": "critical", "message": "Battery pack temperature above threshold" }
+  ]
+}

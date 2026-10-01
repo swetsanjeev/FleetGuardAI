@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fleetguard-api-persistence"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+	"fastapi==0.115.5",
+	"uvicorn[standard]==0.32.1",
+	"SQLAlchemy==2.0.36",
+	"alembic==1.14.0",
+	"psycopg[binary]==3.2.3",
+	"pymongo==4.10.1",
+	"redis==5.2.0",
+	"pgvector==0.3.6",
+	"pydantic-settings==2.6.1",
+	"boto3==1.35.71",
+	"pyarrow==18.1.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fleetguard_db*"]

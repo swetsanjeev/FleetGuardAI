@@ -1,0 +1,4 @@
+﻿{
+  "answer": "Vehicle 1FAG...0002 has the highest battery degradation rate this month (SOH dropped 2.1%).",
+  "citations": ["maintenance-report-2026-09.pdf", "telemetry:1FAGV37P8VG000002:soh"]
+}

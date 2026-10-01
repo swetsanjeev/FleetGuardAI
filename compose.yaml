@@ -1,0 +1,413 @@
+name: fleetguard
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Run the developer command to generate .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run the developer command to generate .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mongodb:
+    image: mongo:7.0.14
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Run the developer command to generate .env}
+    volumes:
+      - mongodb-data:/data/db
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  redis:
+    image: redis:7.4.1-alpine
+    command: ["sh", "-ec", "exec redis-server --appendonly yes --requirepass \"$${REDIS_PASSWORD}\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run the developer command to generate .env}
+    volumes:
+      - redis-data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  database-init:
+    build: ./services/api
+    image: fleetguard/api:dev
+    command: ["sh", "-ec", "python -m fleetguard_db.bootstrap && alembic -c alembic.ini upgrade head && python -m fleetguard_db.seed"]
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      DATABASE_URL: ${DATABASE_URL:?Run the developer command to generate .env}
+      DATABASE_MIGRATION_URL: ${DATABASE_MIGRATION_URL:?Run the developer command to generate .env}
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL:?Run the developer command to generate .env}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?Set POSTGRES_APP_USER in .env}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?Run the developer command to generate .env}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:?Set POSTGRES_MIGRATION_USER in .env}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD:?Run the developer command to generate .env}
+      MONGODB_URL: ${MONGODB_URL:?Run the developer command to generate .env}
+      MONGODB_ADMIN_URL: ${MONGODB_ADMIN_URL:?Run the developer command to generate .env}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-fleetguard}
+      MONGODB_APP_USER: ${MONGODB_APP_USER:?Set MONGODB_APP_USER in .env}
+      MONGODB_APP_PASSWORD: ${MONGODB_APP_PASSWORD:?Run the developer command to generate .env}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      PGVECTOR_EMBEDDING_DIMENSION: ${PGVECTOR_EMBEDDING_DIMENSION:-1536}
+      SEED_DATA_ENABLED: ${SEED_DATA_ENABLED:-true}
+      SEED_VEHICLE_COUNT: ${SEED_VEHICLE_COUNT:-10}
+    volumes:
+      - ./services/api/migrations:/app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks: [backend]
+    restart: "no"
+
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:29092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:?Set KAFKA_CLUSTER_ID in .env}
+    ports:
+      - "127.0.0.1:9092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 30s
+
+  mqtt:
+    image: emqx/emqx:5.8.8
+    environment:
+      EMQX_NODE_NAME: emqx@mqtt
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE:?Run the developer command to generate .env}
+    ports:
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18083/status | grep -q 'is started'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  object-storage:
+    image: chrislusf/seaweedfs:4.48
+    environment:
+      AWS_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY:?Run the developer command to generate .env}
+      AWS_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_KEY:?Run the developer command to generate .env}
+      S3_BUCKET: ${OBJECT_STORAGE_BUCKET:-fleetguard}
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - object-storage-data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8333/ | grep -Eq '^(200|403)$'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  flink-jobmanager:
+    build:
+      context: ./services/stream-processor
+    image: fleetguard/stream-processor:dev
+    command: ["jobmanager"]
+    environment:
+      FLINK_PROPERTIES: "jobmanager.rpc.address: flink-jobmanager\nrest.address: flink-jobmanager\nparallelism.default: 1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8081/overview >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  flink-taskmanager:
+    image: fleetguard/stream-processor:dev
+    command: ["taskmanager"]
+    environment:
+      FLINK_PROPERTIES: "jobmanager.rpc.address: flink-jobmanager\ntaskmanager.numberOfTaskSlots: 2\nparallelism.default: 1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://flink-jobmanager:8081/taskmanagers | grep -q '\"id\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  api:
+    build: ./services/api
+    image: fleetguard/api:dev
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      PORT: 8000
+      DATABASE_URL: ${DATABASE_URL:?Run the developer command to generate .env}
+      MONGODB_URL: ${MONGODB_URL:?Run the developer command to generate .env}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-fleetguard}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      PGVECTOR_EMBEDDING_DIMENSION: ${PGVECTOR_EMBEDDING_DIMENSION:-1536}
+      OBJECT_STORAGE_ENDPOINT: http://object-storage:8333
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:?Run the developer command to generate .env}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:?Run the developer command to generate .env}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-fleetguard}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MQTT_URL: mqtt://mqtt:1883
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      database-init:
+        condition: service_completed_successfully
+      object-storage:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  simulator:
+    build: ./services/simulator
+    image: fleetguard/simulator:dev
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      PORT: 8000
+      MQTT_URL: mqtt://mqtt:1883
+      MQTT_TOPIC_PREFIX: fleet
+    depends_on:
+      mqtt:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck: &python-health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  ingestion:
+    build: ./services/ingestion
+    image: fleetguard/ingestion:dev
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      PORT: 8000
+      MQTT_URL: mqtt://mqtt:1883
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: telemetry.raw
+    depends_on:
+      mqtt:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck: *python-health
+
+  ml-service:
+    build: ./services/ml-service
+    image: fleetguard/ml-service:dev
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      PORT: 8000
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      MODEL_VERSION: baseline-v1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck: *python-health
+
+  ai-agent:
+    build: ./services/ai-agent
+    image: fleetguard/ai-agent:dev
+    environment:
+      APP_ENV: development
+      LOG_LEVEL: INFO
+      PORT: 8000
+      API_BASE_URL: http://api:8000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck: *python-health
+
+  frontend:
+    build: ./frontend
+    image: fleetguard/frontend:dev
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      API_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./infrastructure/docker/development/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "/bin/prometheus", "--version"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./infrastructure/docker/development/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./infrastructure/docker/development/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3200/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?Set GRAFANA_ADMIN_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Run the developer command to generate .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infrastructure/docker/development/grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  mongodb-data:
+  redis-data:
+  kafka-data:
+  emqx-data:
+  emqx-log:
+  object-storage-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:

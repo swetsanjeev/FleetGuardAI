@@ -1,0 +1,7 @@
+﻿{
+  "batchId": "batch-8842",
+  "points": [
+    { "vin": "1FAGV37P8VG000001", "speedKph": 54, "batterySoc": 64, "lat": 37.7749, "lon": -122.4194 },
+    { "vin": "1FAGV37P8VG000002", "speedKph": 0, "batterySoc": 18, "lat": 37.8044, "lon": -122.2711 }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "fleetguard-frontend",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0"
+  },
+  "dependencies": {
+    "next": "15.5.9",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  }
+}

@@ -1,0 +1,15 @@
+Metadata-Version: 2.4
+Name: fleetguard-api-persistence
+Version: 0.1.0
+Requires-Python: >=3.10
+Requires-Dist: fastapi==0.115.5
+Requires-Dist: uvicorn[standard]==0.32.1
+Requires-Dist: SQLAlchemy==2.0.36
+Requires-Dist: alembic==1.14.0
+Requires-Dist: psycopg[binary]==3.2.3
+Requires-Dist: pymongo==4.10.1
+Requires-Dist: redis==5.2.0
+Requires-Dist: pgvector==0.3.6
+Requires-Dist: pydantic-settings==2.6.1
+Requires-Dist: boto3==1.35.71
+Requires-Dist: pyarrow==18.1.0
